@@ -164,7 +164,7 @@ class Client:
             self.rtspSeq += 1
 
             # Write the RTSP request to be sent.
-            request = f"SETUP {self.fileName} RTSP/1.0\nCSeq: {self.rtspSeq}\nTransport: RTP/UDP; client_port= {self.rtpPort}\n\n"
+            request = f"SETUP {self.fileName} RTSP/1.0\r\nCSeq: {self.rtspSeq}\r\nTransport: RTP/UDP; client_port={self.rtpPort}\r\n\r\n"
 
             # Keep track of the sent request.
             self.requestSent = self.SETUP
@@ -175,7 +175,7 @@ class Client:
             self.rtspSeq += 1
 
             # Write the RTSP request to be sent.
-            request = f"PLAY {self.fileName} RTSP/1.0\nCSeq: {self.rtspSeq}\nSession: {self.sessionId}\n\n"
+            request = f"PLAY {self.fileName} RTSP/1.0\r\nCSeq: {self.rtspSeq}\r\nSession: {self.sessionId}\r\n\r\n"
 
             # Keep track of the sent request.
             self.requestSent = self.PLAY
@@ -186,7 +186,7 @@ class Client:
             self.rtspSeq += 1
 
             # Write the RTSP request to be sent.
-            request = f"PAUSE {self.fileName} RTSP/1.0\nCSeq: {self.rtspSeq}\nSession: {self.sessionId}\n\n"
+            request = f"PAUSE {self.fileName} RTSP/1.0\r\nCSeq: {self.rtspSeq}\r\nSession: {self.sessionId}\r\n\r\n"
 
             # Keep track of the sent request.
             self.requestSent = self.PAUSE
@@ -197,7 +197,7 @@ class Client:
             self.rtspSeq += 1
 
             # Write the RTSP request to be sent.
-            request = f"TEARDOWN {self.fileName} RTSP/1.0\nCSeq: {self.rtspSeq}\nSession: {self.sessionId}\n\n"
+            request = f"TEARDOWN {self.fileName} RTSP/1.0\r\nCSeq: {self.rtspSeq}\r\nSession: {self.sessionId}\r\n\r\n"
 
             # Keep track of the sent request.
             self.requestSent = self.TEARDOWN
@@ -207,6 +207,7 @@ class Client:
         # Send the RTSP request using rtspSocket.
         try:
             self.rtspSocket.send(request.encode())
+            print(f"RTP socket bound on UDP port {self.rtpPort}")
         except Exception:
             # If send fails, show warning
             tkinter.messagebox.showwarning('Send Failed', 'Failed to send RTSP request.')
@@ -223,10 +224,12 @@ class Client:
                 break
 
             if reply:
+                # Debug: show raw RTSP reply
                 try:
-                    self.parseRtspReply(reply.decode("utf-8"))
+                    text = reply.decode("utf-8", errors="replace")
+                    print("\nRTSP Reply received:\n" + text)
+                    self.parseRtspReply(text)
                 except Exception:
-                    # avoid thread crashing on malformed replies
                     traceback.print_exc()
 
             # Close the RTSP socket upon requesting Teardown

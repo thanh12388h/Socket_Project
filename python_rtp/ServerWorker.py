@@ -52,23 +52,25 @@ class ServerWorker:
 		# Process SETUP request
 		if requestType == self.SETUP:
 			if self.state == self.INIT:
-				# Update state
 				print("processing SETUP\n")
-				
+
 				try:
 					self.clientInfo['videoStream'] = VideoStream(filename)
 					self.state = self.READY
 				except IOError:
 					self.replyRtsp(self.FILE_NOT_FOUND_404, seq[1])
-				
-				# Generate a randomized RTSP session ID
+
 				self.clientInfo['session'] = randint(100000, 999999)
-				
-				# Send RTSP reply
 				self.replyRtsp(self.OK_200, seq[1])
-				
-				# Get the RTP/UDP port from the last line
-				self.clientInfo['rtpPort'] = request[2].split(' ')[3]
+
+				# === FIX LỖI Ở ĐÂY ===
+				transportLine = request[2]
+				parts = transportLine.split(';')
+				for p in parts:
+					if "client_port" in p:
+						self.clientInfo['rtpPort'] = p.split('=')[1].strip()
+						break
+
 		
 		# Process PLAY request 		
 		elif requestType == self.PLAY:
