@@ -34,6 +34,11 @@ class Client:
         self.teardownAcked = 0
         self.connectToServer()
         self.frameNbr = 0
+        # buffer for fragmented frames: frame_id -> { 'total':int, 'chunks':{}, 'received':set(), 'time':float }
+        self.frames_buf = {}
+        # stats
+        self.packets_received = 0
+        self.bytes_received = 0
 
     def createWidgets(self):
         """Build GUI."""
@@ -101,17 +106,62 @@ class Client:
         """Listen for RTP packets."""
         while True:
             try:
-                data = self.rtpSocket.recv(20480)
+                data = self.rtpSocket.recv(65536)
                 if data:
+                    self.packets_received += 1
+                    self.bytes_received += len(data)
+
                     rtpPacket = RtpPacket()
                     rtpPacket.decode(data)
 
-                    currFrameNbr = rtpPacket.seqNum()
-                    print("Current Seq Num: " + str(currFrameNbr))
+                    payload = rtpPacket.getPayload()
 
-                    if currFrameNbr > self.frameNbr: # Discard the late packet
-                        self.frameNbr = currFrameNbr
-                        self.updateMovie(self.writeFrame(rtpPacket.getPayload()))
+                    # expect custom fragment header: 4B frame_id,2B frag_idx,2B total
+                    if len(payload) < 8:
+                        # malformed or legacy packet: treat entire payload as one frame
+                        currFrameNbr = rtpPacket.seqNum()
+                        print("Current Seq Num: " + str(currFrameNbr))
+                        if currFrameNbr > self.frameNbr:
+                            self.frameNbr = currFrameNbr
+                            self.updateMovie(self.writeFrame(payload))
+                        continue
+
+                    frame_id = int.from_bytes(payload[0:4], 'big')
+                    frag_idx = int.from_bytes(payload[4:6], 'big')
+                    total = int.from_bytes(payload[6:8], 'big')
+                    chunk = payload[8:]
+
+                    entry = self.frames_buf.get(frame_id)
+                    if not entry:
+                        entry = {'total': total, 'chunks': {}, 'received': set(), 'time': __import__('time').time()}
+                        self.frames_buf[frame_id] = entry
+
+                    # store chunk
+                    if frag_idx not in entry['received']:
+                        entry['chunks'][frag_idx] = chunk
+                        entry['received'].add(frag_idx)
+
+                    # if complete -> reassemble
+                    if len(entry['received']) == entry['total']:
+                        parts = [entry['chunks'][i] for i in range(entry['total'])]
+                        frame_bytes = b''.join(parts)
+                        # update frame number and display
+                        print("Current Frame ID: " + str(frame_id))
+                        if frame_id > self.frameNbr:
+                            self.frameNbr = frame_id
+                            self.updateMovie(self.writeFrame(frame_bytes))
+                        # cleanup
+                        try:
+                            del self.frames_buf[frame_id]
+                        except Exception:
+                            pass
+
+                    # cleanup old incomplete frames (older than 1s)
+                    now = __import__('time').time()
+                    to_del = [fid for fid, e in self.frames_buf.items() if now - e['time'] > 1.0]
+                    for fid in to_del:
+                        del self.frames_buf[fid]
+
             except Exception:
                 # Stop listening upon requesting PAUSE or TEARDOWN
                 if hasattr(self, 'playEvent') and self.playEvent.isSet():
