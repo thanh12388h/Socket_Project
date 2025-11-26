@@ -51,6 +51,15 @@ class Client:
         self.frames_reassembled = 0
         self.frames_displayed = 0
         self.frames_dropped = 0
+        # per-second window counters for reporting
+        self._window_packets = 0
+        self._window_bytes = 0
+        self._window_lost = 0
+        self._window_frames_reassembled = 0
+        self._window_frames_displayed = 0
+        self._window_frames_dropped = 0
+        # RTP seq tracking for loss calc
+        self._last_seq = None
 
     def createWidgets(self):
         """Build GUI."""
@@ -115,6 +124,8 @@ class Client:
             threading.Thread(target=self.listenRtp, daemon=True).start()
             threading.Thread(target=self.playbackThread, daemon=True).start()
             self.sendRtspRequest(self.PLAY)
+            # start periodic reporter thread (reports every 1s)
+            threading.Thread(target=self._reporterThread, daemon=True).start()
 
     def listenRtp(self):
         """Listen for RTP packets."""
@@ -124,11 +135,28 @@ class Client:
                 if data:
                     self.packets_received += 1
                     self.bytes_received += len(data)
+                    # window counters
+                    self._window_packets += 1
+                    self._window_bytes += len(data)
 
                     rtpPacket = RtpPacket()
                     rtpPacket.decode(data)
 
                     payload = rtpPacket.getPayload()
+                    # update seq-based loss tracking
+                    try:
+                        seq = rtpPacket.seqNum()
+                        if self._last_seq is None:
+                            self._last_seq = seq
+                        else:
+                            if seq > self._last_seq:
+                                gap = seq - self._last_seq - 1
+                                if gap > 0:
+                                    self._window_lost += gap
+                            # NOTE: not handling 16-bit wrap-around here
+                            self._last_seq = seq
+                    except Exception:
+                        pass
                     # extract timestamp (ms) for playout
                     try:
                         pkt_ts = rtpPacket.timestamp()
@@ -166,6 +194,7 @@ class Client:
                         frame_bytes = b''.join(parts)
                         # update frame number and enqueue for playout
                         self.frames_reassembled += 1
+                        self._window_frames_reassembled += 1
                         print("Reassembled Frame ID: %d ts=%d" % (frame_id, entry.get('timestamp', 0)))
                         with self.play_lock:
                             heapq.heappush(self.play_queue, (entry.get('timestamp', pkt_ts), frame_bytes))
@@ -250,8 +279,10 @@ class Client:
                 try:
                     self.updateMovie(self.writeFrame(frame_bytes))
                     self.frames_displayed += 1
+                    self._window_frames_displayed += 1
                 except Exception:
                     self.frames_dropped += 1
+                    self._window_frames_dropped += 1
 
             elapsed = _time.time() - tick_start
             to_sleep = frame_interval - elapsed
@@ -261,6 +292,61 @@ class Client:
                     if hasattr(self, 'playEvent') and self.playEvent.isSet():
                         return
                     _time.sleep(0.005)
+
+    def _reporterThread(self):
+        """Periodic reporter: compute packet loss, bitrate, frame stats and send to server via RTSP REPORT."""
+        import time as _time
+        while True:
+            # stop when playEvent set or teardown acknowledged
+            if hasattr(self, 'playEvent') and self.playEvent.isSet():
+                return
+            if self.teardownAcked == 1:
+                return
+            _time.sleep(1.0)
+
+            # compute window stats
+            pkts = self._window_packets
+            lost = self._window_lost
+            bytes_w = self._window_bytes
+            frames_re = self._window_frames_reassembled
+            frames_disp = self._window_frames_displayed
+            frames_drop = self._window_frames_dropped
+
+            expected = pkts + lost
+            loss_pct = (float(lost) / expected * 100.0) if expected > 0 else 0.0
+            bitrate_kbps = (bytes_w * 8.0) / 1000.0
+
+            # build REPORT request
+            try:
+                self.rtspSeq += 1
+                report = (
+                    f"REPORT {self.fileName} RTSP/1.0\r\n"
+                    f"CSeq: {self.rtspSeq}\r\n"
+                    f"Session: {self.sessionId}\r\n"
+                    f"Stats-Packets-Recv: {pkts}\r\n"
+                    f"Stats-Packets-Lost: {lost}\r\n"
+                    f"Stats-Packets-Expected: {expected}\r\n"
+                    f"Stats-Loss-Pct: {loss_pct:.2f}\r\n"
+                    f"Stats-Bitrate-Kbps: {bitrate_kbps:.2f}\r\n"
+                    f"Stats-Frames-Reassembled: {frames_re}\r\n"
+                    f"Stats-Frames-Displayed: {frames_disp}\r\n"
+                    f"Stats-Frames-Dropped: {frames_drop}\r\n\r\n"
+                )
+                try:
+                    self.rtspSocket.send(report.encode())
+                    print("Sent RTSP REPORT:\n" + report)
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
+            # reset window counters
+            self._window_packets = 0
+            self._window_bytes = 0
+            self._window_lost = 0
+            self._window_frames_reassembled = 0
+            self._window_frames_displayed = 0
+            self._window_frames_dropped = 0
 
     def updateMovie(self, imageFile):
         """Update the image file as video frame in the GUI."""

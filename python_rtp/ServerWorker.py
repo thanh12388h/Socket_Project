@@ -123,6 +123,20 @@ class ServerWorker:
 			
 			# Close the RTP socket
 			self.clientInfo['rtpSocket'].close()
+
+		# Process REPORT request (stats from client)
+		elif requestType == 'REPORT':
+			print("Received REPORT from client:")
+			for line in request[1:]:
+				line = line.strip()
+				if not line:
+					continue
+				print('  ' + line)
+			# Reply OK
+			try:
+				self.replyRtsp(self.OK_200, seq[1])
+			except Exception:
+				pass
 			
 	def sendRtp(self):
 		"""Send RTP packets over UDP."""
