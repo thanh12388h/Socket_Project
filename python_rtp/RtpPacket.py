@@ -8,9 +8,13 @@ class RtpPacket:
 	def __init__(self):
 		pass
 		
-	def encode(self, version, padding, extension, cc, seqnum, marker, pt, ssrc, payload):
-		"""Encode the RTP packet with header fields and payload."""
-		timestamp = int(time())
+	def encode(self, version, padding, extension, cc, seqnum, marker, pt, ssrc, payload, timestamp=None):
+		"""Encode the RTP packet with header fields and payload.
+		If `timestamp` (ms) is provided, use it; otherwise use current time in ms.
+		"""
+		# Use provided timestamp (ms) when available; else use millisecond-resolution now
+		if timestamp is None:
+			timestamp = int(time() * 1000)
 		header = bytearray(HEADER_SIZE)
 		#--------------
 		# TO COMPLETE

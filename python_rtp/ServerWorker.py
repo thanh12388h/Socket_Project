@@ -1,5 +1,5 @@
 from random import randint
-import sys, traceback, threading, socket
+import sys, traceback, threading, socket, os
 
 from VideoStream import VideoStream
 from RtpPacket import RtpPacket
@@ -71,6 +71,14 @@ class ServerWorker:
 						self.clientInfo['rtpPort'] = p.split('=')[1].strip()
 						break
 
+				# parse optional FPS header from SETUP
+				for line in request:
+					if line.strip().upper().startswith('FPS:'):
+						try:
+							self.clientInfo['fps'] = int(line.split(':', 1)[1].strip())
+						except Exception:
+							pass
+
 		
 		# Process PLAY request 		
 		elif requestType == self.PLAY:
@@ -141,8 +149,22 @@ class ServerWorker:
 			frame_len = len(data)
 			total = (frame_len + PAYLOAD_PER_PACKET - 1) // PAYLOAD_PER_PACKET
 
+			# determine address/port
 			address = self.clientInfo['rtspSocket'][1][0]
 			port = int(self.clientInfo['rtpPort'])
+
+			# determine fps for this session (server env fallback)
+			fps = self.clientInfo.get('fps') or int(os.getenv('RTP_FPS', '25'))
+			try:
+				fps = int(fps)
+			except Exception:
+				fps = 25
+			if fps <= 0:
+				fps = 25
+
+			# assign a deterministic timestamp (ms) for this frame based on frame_id
+			# we use (frame_id-1) so first frame is timestamp 0
+			frame_ts_ms = int((frame_id - 1) * (1000.0 / float(fps)))
 
 			# send each fragment as its own RTP packet
 			for frag_idx in range(total):
@@ -155,7 +177,7 @@ class ServerWorker:
 				marker = 1 if (frag_idx == total - 1) else 0
 				seq = self.clientInfo.get('rtp_seq', 0)
 				try:
-					pkt = self.makeRtp(packet_payload, seq, marker)
+					pkt = self.makeRtp(packet_payload, seq, marker, timestamp=frame_ts_ms)
 					self.clientInfo['rtpSocket'].sendto(pkt, (address, port))
 					# stats
 					self.clientInfo['packets_sent'] = self.clientInfo.get('packets_sent', 0) + 1
@@ -165,8 +187,10 @@ class ServerWorker:
 				except Exception:
 					print("Connection Error")
 
-
-	def makeRtp(self, payload, seqnum, marker):
+			# Pace sending to target frame rate (allow event to interrupt)
+			frame_interval = 1.0 / float(fps)
+			self.clientInfo['event'].wait(frame_interval)
+	def makeRtp(self, payload, seqnum, marker, timestamp=None):
 		"""RTP-packetize the video data with given sequence number and marker."""
 		version = 2
 		padding = 0
@@ -176,7 +200,7 @@ class ServerWorker:
 		ssrc = 0
 
 		rtpPacket = RtpPacket()
-		rtpPacket.encode(version, padding, extension, cc, seqnum, marker, pt, ssrc, payload)
+		rtpPacket.encode(version, padding, extension, cc, seqnum, marker, pt, ssrc, payload, timestamp=timestamp)
 
 		return rtpPacket.getPacket()
 		

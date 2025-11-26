@@ -4,6 +4,7 @@ from PIL import Image, ImageTk
 import socket, threading, sys, traceback, os
 
 from RtpPacket import RtpPacket
+import heapq, time
 
 CACHE_FILE_NAME = "cache-"
 CACHE_FILE_EXT = ".jpg"
@@ -39,6 +40,17 @@ class Client:
         # stats
         self.packets_received = 0
         self.bytes_received = 0
+        # playback queue (min-heap) of (timestamp_ms, frame_bytes)
+        self.play_queue = []
+        self.play_lock = threading.Lock()
+        self.play_start_time_ms = None
+        self.play_start_ts = None
+        # playback/jitter settings
+        self.jitter_ms = int(os.getenv('RTP_JITTER_MS', '200'))
+        # stats
+        self.frames_reassembled = 0
+        self.frames_displayed = 0
+        self.frames_dropped = 0
 
     def createWidgets(self):
         """Build GUI."""
@@ -96,10 +108,12 @@ class Client:
     def playMovie(self):
         """Play button handler."""
         if self.state == self.READY:
-            # Create a new thread to listen for RTP packets
-            threading.Thread(target=self.listenRtp).start()
+            # Create playEvent first so threads can observe it
             self.playEvent = threading.Event()
             self.playEvent.clear()
+            # Create threads
+            threading.Thread(target=self.listenRtp, daemon=True).start()
+            threading.Thread(target=self.playbackThread, daemon=True).start()
             self.sendRtspRequest(self.PLAY)
 
     def listenRtp(self):
@@ -115,6 +129,11 @@ class Client:
                     rtpPacket.decode(data)
 
                     payload = rtpPacket.getPayload()
+                    # extract timestamp (ms) for playout
+                    try:
+                        pkt_ts = rtpPacket.timestamp()
+                    except Exception:
+                        pkt_ts = int(time.time() * 1000)
 
                     # expect custom fragment header: 4B frame_id,2B frag_idx,2B total
                     if len(payload) < 8:
@@ -133,7 +152,7 @@ class Client:
 
                     entry = self.frames_buf.get(frame_id)
                     if not entry:
-                        entry = {'total': total, 'chunks': {}, 'received': set(), 'time': __import__('time').time()}
+                        entry = {'total': total, 'chunks': {}, 'received': set(), 'time': __import__('time').time(), 'timestamp': pkt_ts}
                         self.frames_buf[frame_id] = entry
 
                     # store chunk
@@ -145,11 +164,13 @@ class Client:
                     if len(entry['received']) == entry['total']:
                         parts = [entry['chunks'][i] for i in range(entry['total'])]
                         frame_bytes = b''.join(parts)
-                        # update frame number and display
-                        print("Current Frame ID: " + str(frame_id))
+                        # update frame number and enqueue for playout
+                        self.frames_reassembled += 1
+                        print("Reassembled Frame ID: %d ts=%d" % (frame_id, entry.get('timestamp', 0)))
+                        with self.play_lock:
+                            heapq.heappush(self.play_queue, (entry.get('timestamp', pkt_ts), frame_bytes))
                         if frame_id > self.frameNbr:
                             self.frameNbr = frame_id
-                            self.updateMovie(self.writeFrame(frame_bytes))
                         # cleanup
                         try:
                             del self.frames_buf[frame_id]
@@ -187,6 +208,60 @@ class Client:
             file.write(data)
         return cachename
 
+    def playbackThread(self):
+        """Consume buffered frames at a steady rate based on `RTP_FPS`.
+        This prevents burst catch-up and ensures steady playback.
+        """
+        import time as _time, os
+        try:
+            fps = int(os.getenv('RTP_FPS', '25'))
+        except Exception:
+            fps = 25
+        if fps <= 0:
+            fps = 25
+        frame_interval = 1.0 / float(fps)
+
+        # initial buffer: number of frames equivalent to jitter_ms
+        target_buffer_frames = max(1, int((self.jitter_ms / 1000.0) * fps))
+        buffer_wait_start = _time.time()
+        while True:
+            if hasattr(self, 'playEvent') and self.playEvent.isSet():
+                return
+            with self.play_lock:
+                qlen = len(self.play_queue)
+            if qlen >= target_buffer_frames:
+                break
+            if _time.time() - buffer_wait_start > 2.0:
+                break
+            _time.sleep(0.01)
+
+        while True:
+            if hasattr(self, 'playEvent') and self.playEvent.isSet():
+                break
+
+            tick_start = _time.time()
+            with self.play_lock:
+                if self.play_queue:
+                    ts, frame_bytes = heapq.heappop(self.play_queue)
+                else:
+                    frame_bytes = None
+
+            if frame_bytes is not None:
+                try:
+                    self.updateMovie(self.writeFrame(frame_bytes))
+                    self.frames_displayed += 1
+                except Exception:
+                    self.frames_dropped += 1
+
+            elapsed = _time.time() - tick_start
+            to_sleep = frame_interval - elapsed
+            if to_sleep > 0:
+                end_time = _time.time() + to_sleep
+                while _time.time() < end_time:
+                    if hasattr(self, 'playEvent') and self.playEvent.isSet():
+                        return
+                    _time.sleep(0.005)
+
     def updateMovie(self, imageFile):
         """Update the image file as video frame in the GUI."""
         photo = ImageTk.PhotoImage(Image.open(imageFile))
@@ -214,7 +289,8 @@ class Client:
             self.rtspSeq += 1
 
             # Write the RTSP request to be sent.
-            request = f"SETUP {self.fileName} RTSP/1.0\r\nCSeq: {self.rtspSeq}\r\nTransport: RTP/UDP; client_port={self.rtpPort}\r\n\r\n"
+            fps = os.getenv('RTP_FPS', '25')
+            request = f"SETUP {self.fileName} RTSP/1.0\r\nCSeq: {self.rtspSeq}\r\nTransport: RTP/UDP; client_port={self.rtpPort}\r\nFPS: {fps}\r\n\r\n"
 
             # Keep track of the sent request.
             self.requestSent = self.SETUP
