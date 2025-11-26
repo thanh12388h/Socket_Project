@@ -36,10 +36,10 @@ class RtpPacket:
 		
 		# Get the payload from the argument
 		# self.payload = ...
-		
-		self.payload = bytearray(payload)
-		
-		
+		if isinstance(payload, bytes):
+			self.payload = bytearray(payload)
+		else:
+			self.payload = bytearray(payload)
 		
 	def decode(self, byteStream):
 		"""Decode the RTP packet."""
