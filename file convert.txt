@@ -1,0 +1,5 @@
+Lí do có hàm convert_to_prefixed_mjpeg là vì:
+-Hàm nextFrame trong file videoStream chỉ chạy được file.Mjpeg theo định dạng "5-byte ASCII length prefix + frame data" (mỗi frame bắt đầu bằng 5 ký tự số biểu diễn độ dài khung), nên sẽ chạy được.
+-Còn 720p.mjpeg là MJPEG "gộp nối" (chuỗi JPEG liên tiếp bắt đầu bằng marker SOI 0xFFD8),720p.mjpeg là file raw tải trên mạng chưa có header với 5 byte.
+Do đó khi code đọc 5 byte đầu của 720p.mjpeg và gọi int(...) sẽ ra một giá trị vô nghĩa — dẫn tới đọc sai dữ liệu khung, hoặc tăng số khung nội bộ sai, hoặc không có frame hợp lệ để gửi → client không hiển thị.
+Nên có hàm convert_to_prefixed_mjpeg để chuyển đổi định dạng của các file này.

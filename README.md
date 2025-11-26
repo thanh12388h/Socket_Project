@@ -1,19 +1,28 @@
+**RUN Video 360p**
+
+**bash**
+cd python_rtp
+
 **Run Server:**
 
-python Server.py 1023
-
-**Create a venv environment:**
-
-py -3 -m venv venv_win
-
-**Activate a venv environment:**
-
-deactivate
-
-.\venv_win\Scripts\Activate.ps1
-
-pip install Pillow 
+python Server.py 2026
 
 **Run Client:**
 
-python ClientLauncher.py 10.126.3.140 1023 5000 movie 
+python ClientLauncher.py 10.240.168.190 2026 5000 movie.Mjpeg 
+
+
+**Run Video 720p**
+**RAW MJPEG**
+**EX: 720p.mjpeg cant play**
+**Convert file cant play**
+python convert_to_prefixed_mjpeg.py 720p.mjpeg temp.Mjpeg
+
+**Run Server:**
+
+python Server.py 2026
+
+**Run Client:**
+
+python ClientLauncher.py 10.240.168.190 2026 5000 temp.Mjpeg 
+
