@@ -1,3 +1,6 @@
+**Install**
+pip install pillow
+
 **RUN Video 360p**
 
 **bash**
