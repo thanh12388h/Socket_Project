@@ -1,6 +1,7 @@
 **Install**
 pip install pillow
 
+
 **RUN Video 360p**
 
 **bash**
@@ -12,7 +13,7 @@ python Server.py 2026
 
 **Run Client:**
 
-python ClientLauncher.py 10.240.168.190 2026 5000 movie.Mjpeg 
+python ClientLauncher.py 10.111.209.190 2026 5000 movie.Mjpeg 
 
 
 **Run Video 720p**
@@ -27,5 +28,5 @@ python Server.py 2026
 
 **Run Client:**
 
-python ClientLauncher.py 10.240.168.190 2026 5000 temp.Mjpeg 
+python ClientLauncher.py 10.111.209.190 2026 5000 temp.Mjpeg 
 

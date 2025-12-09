@@ -60,6 +60,8 @@ class Client:
         self._window_frames_dropped = 0
         # RTP seq tracking for loss calc
         self._last_seq = None
+        # window auto-resize flag
+        self._window_resized = False
 
     def createWidgets(self):
         """Build GUI."""
@@ -87,9 +89,13 @@ class Client:
         self.teardown["command"] =  self.exitClient
         self.teardown.grid(row=1, column=3, padx=2, pady=2)
 
-        # Create a label to display the movie
-        self.label = Label(self.master, height=19)
+        # Create a label to display the movie (auto-size for HD/720p)
+        self.label = Label(self.master, bg='black')
         self.label.grid(row=0, column=0, columnspan=4, sticky=W+E+N+S, padx=5, pady=5)
+        
+        # Configure grid weights so label expands with window
+        self.master.grid_rowconfigure(0, weight=1)
+        self.master.grid_columnconfigure(0, weight=1)
 
     def setupMovie(self):
         """Setup button handler."""
@@ -350,9 +356,43 @@ class Client:
 
     def updateMovie(self, imageFile):
         """Update the image file as video frame in the GUI."""
-        photo = ImageTk.PhotoImage(Image.open(imageFile))
-        self.label.configure(image = photo, height=288)
-        self.label.image = photo
+        try:
+            img = Image.open(imageFile)
+            img_width, img_height = img.size
+            
+            # Auto-resize window on first frame to match video resolution
+            if not self._window_resized:
+                self._window_resized = True
+                # Add padding for buttons (80px) and ensure minimum width for buttons (640px)
+                window_width = max(img_width, 640)
+                window_height = img_height + 80
+                self.master.geometry(f"{window_width}x{window_height}")
+                # Force GUI update
+                self.master.update()
+            
+            # Get available label space (allow some margin)
+            label_width = self.label.winfo_width()
+            label_height = self.label.winfo_height()
+            
+            # If label not yet drawn, use video dimensions
+            if label_width <= 1:
+                label_width = img_width
+            if label_height <= 1:
+                label_height = img_height
+            
+            # Calculate scaling to fit within label while maintaining aspect ratio
+            scale = min(label_width / img_width, label_height / img_height)
+            
+            # Only scale down, never up (to preserve quality)
+            if scale < 1:
+                new_size = (int(img_width * scale), int(img_height * scale))
+                img = img.resize(new_size, Image.Resampling.LANCZOS)
+            
+            photo = ImageTk.PhotoImage(img)
+            self.label.configure(image=photo)
+            self.label.image = photo
+        except Exception as e:
+            print(f"Error updating movie: {e}")
 
     def connectToServer(self):
         """Connect to the Server. Start a new RTSP/TCP session."""

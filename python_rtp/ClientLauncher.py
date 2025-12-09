@@ -13,6 +13,9 @@ if __name__ == "__main__":
 	
 	root = Tk()
 	
+	# Initial window size (will auto-resize to match video resolution on first frame)
+	root.geometry("800x500")
+	
 	# Create a new client
 	app = Client(root, serverAddr, serverPort, rtpPort, fileName)
 	app.master.title("RTPClient")	
