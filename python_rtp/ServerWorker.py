@@ -70,7 +70,6 @@ class ServerWorker:
 					if "client_port" in p:
 						self.clientInfo['rtpPort'] = p.split('=')[1].strip()
 						break
-
 		
 		# Process PLAY request 		
 		elif requestType == self.PLAY:

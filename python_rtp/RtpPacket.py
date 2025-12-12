@@ -16,17 +16,21 @@ class RtpPacket:
 		# TO COMPLETE
 		#--------------
 		# Fill the header bytearray with RTP header fields
-		
 		# header[0] = ...
-		# ...
+  
+		# Version, padding, extension, cc 
 		header[0] = ((version & 0x03) << 6) | ((padding & 0x01) << 5) | ((extension & 0x01) << 4) | (cc & 0x0F)
+		# Marker, pt 
 		header[1] = ((marker & 0x01) << 7) | (pt & 0x7F)
+		# Seq number 
 		header[2] = (seqnum >> 8) & 0xFF
 		header[3] = seqnum & 0xFF
+		# Timestamps 
 		header[4] = (timestamp >> 24) & 0xFF
 		header[5] = (timestamp >> 16) & 0xFF
 		header[6] = (timestamp >> 8) & 0xFF
 		header[7] = timestamp & 0xFF
+		# ssrc 
 		header[8]  = (ssrc >> 24) & 0xFF
 		header[9]  = (ssrc >> 16) & 0xFF
 		header[10] = (ssrc >> 8) & 0xFF

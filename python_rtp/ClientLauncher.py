@@ -4,8 +4,8 @@ from Client import Client
 
 if __name__ == "__main__":
 	try:
-		serverAddr = sys.argv[1]
-		serverPort = sys.argv[2]
+		serverAddr = sys.argv[1] # Your laptop's IP Address (Depend on wifi)
+		serverPort = sys.argv[2] 
 		rtpPort = sys.argv[3]
 		fileName = sys.argv[4]	
 	except:
