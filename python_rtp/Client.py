@@ -4,6 +4,7 @@ from PIL import Image, ImageTk
 import socket, threading, sys, traceback, os
 
 from RtpPacket import RtpPacket
+from FrameBuffer import FrameBuffer
 import heapq, time
 
 CACHE_FILE_NAME = "cache-"
@@ -63,6 +64,13 @@ class Client:
         # window auto-resize flag
         self._window_resized = False
 
+        #Caching
+        # Frame Buffer for client-side caching
+        buffer_size = int(os.getenv('FRAME_BUFFER_SIZE', '15'))  # Pre-buffer 15 frames
+        self.frame_buffer = FrameBuffer(maxsize=50, timeout=5.0, pre_buffer=buffer_size)
+        self.buffer_status_label = None
+        self.buffering_active = False
+
     def createWidgets(self):
         """Build GUI."""
         # Create Setup button
@@ -93,6 +101,7 @@ class Client:
         self.label = Label(self.master, bg='black')
         self.label.grid(row=0, column=0, columnspan=4, sticky=W+E+N+S, padx=5, pady=5)
         
+        
         # Configure grid weights so label expands with window
         self.master.grid_rowconfigure(0, weight=1)
         self.master.grid_columnconfigure(0, weight=1)
@@ -100,6 +109,12 @@ class Client:
     def setupMovie(self):
         """Setup button handler."""
         if self.state == self.INIT:
+            # Reset frame buffer for new session
+            self.frame_buffer.reset()
+            self.buffering_active = True
+            self.update_buffer_status()
+            # Start buffering thread
+            threading.Thread(target=self.buffer_update_thread, daemon=True).start()
             self.sendRtspRequest(self.SETUP)
 
     def exitClient(self):
@@ -128,8 +143,9 @@ class Client:
             self.playEvent.clear()
             # Create threads
             threading.Thread(target=self.listenRtp, daemon=True).start()
-            threading.Thread(target=self.playbackThread, daemon=True).start()
             self.sendRtspRequest(self.PLAY)
+            # Wait for pre-buffering before starting playback
+            threading.Thread(target=self._start_playback_when_ready, daemon=True).start()
             # start periodic reporter thread (reports every 1s)
             threading.Thread(target=self._reporterThread, daemon=True).start()
 
@@ -198,12 +214,12 @@ class Client:
                     if len(entry['received']) == entry['total']:
                         parts = [entry['chunks'][i] for i in range(entry['total'])]
                         frame_bytes = b''.join(parts)
-                        # update frame number and enqueue for playout
+                        # update frame number and add to frame buffer
                         self.frames_reassembled += 1
                         self._window_frames_reassembled += 1
                         print("Reassembled Frame ID: %d ts=%d" % (frame_id, entry.get('timestamp', 0)))
-                        with self.play_lock:
-                            heapq.heappush(self.play_queue, (entry.get('timestamp', pkt_ts), frame_bytes))
+                        # Add to FrameBuffer using _add_frame_to_buffer
+                        self.frame_buffer._add_frame_to_buffer(frame_bytes)
                         if frame_id > self.frameNbr:
                             self.frameNbr = frame_id
                         # cleanup
@@ -244,7 +260,7 @@ class Client:
         return cachename
 
     def playbackThread(self):
-        """Consume buffered frames at a steady rate based on `RTP_FPS`.
+        """Consume buffered frames from FrameBuffer at a steady rate based on `RTP_FPS`.
         This prevents burst catch-up and ensures steady playback.
         """
         import time as _time, os
@@ -256,31 +272,21 @@ class Client:
             fps = 25
         frame_interval = 1.0 / float(fps)
 
-        # initial buffer: number of frames equivalent to jitter_ms
-        target_buffer_frames = max(1, int((self.jitter_ms / 1000.0) * fps))
-        buffer_wait_start = _time.time()
-        while True:
-            if hasattr(self, 'playEvent') and self.playEvent.isSet():
-                return
-            with self.play_lock:
-                qlen = len(self.play_queue)
-            if qlen >= target_buffer_frames:
-                break
-            if _time.time() - buffer_wait_start > 2.0:
-                break
-            _time.sleep(0.01)
-
+        print("[Playback] Waiting for frame buffer to be ready...")
+        # Wait for pre-buffering to complete
+        if not self.frame_buffer.wait_pre_buffer(timeout=10.0):
+            print("[Playback] Warning: Pre-buffering timeout, starting anyway...")
+        
+        print("[Playback] Starting playback from buffer...")
+        
         while True:
             if hasattr(self, 'playEvent') and self.playEvent.isSet():
                 break
 
             tick_start = _time.time()
-            with self.play_lock:
-                if self.play_queue:
-                    ts, frame_bytes = heapq.heappop(self.play_queue)
-                else:
-                    frame_bytes = None
-
+            # Get frame from FrameBuffer
+            frame_bytes = self.frame_buffer.get_frame(timeout=0.1)
+            
             if frame_bytes is not None:
                 try:
                     self.updateMovie(self.writeFrame(frame_bytes))
@@ -289,6 +295,12 @@ class Client:
                 except Exception:
                     self.frames_dropped += 1
                     self._window_frames_dropped += 1
+            else:
+                # Buffer is empty, check if we need to rebuffer
+                if self.state == self.PLAYING and self.frame_buffer.frameBuffer.qsize() == 0:
+                    print("[Playback] Buffer underrun! Waiting for more frames...")
+                    _time.sleep(0.1)
+                    continue
 
             elapsed = _time.time() - tick_start
             to_sleep = frame_interval - elapsed
@@ -561,6 +573,45 @@ class Client:
         except Exception:
             tkinter.messagebox.showwarning('Unable to Bind', 'Unable to bind PORT=%d' % self.rtpPort)
 
+    def _start_playback_when_ready(self):
+        """Wait for buffer to be ready, then start playback thread."""
+        import time as _time
+        print("[Client] Waiting for pre-buffering to complete...")
+        self.update_buffer_status()
+        
+        # Wait for buffer to reach target size
+        if self.frame_buffer.wait_pre_buffer(timeout=10.0):
+            print("[Client] Pre-buffering complete! Starting playback...")
+        else:
+            print("[Client] Pre-buffering timeout! Starting playback anyway...")
+        
+        # Start playback thread
+        threading.Thread(target=self.playbackThread, daemon=True).start()
+    
+    def buffer_update_thread(self):
+        """Periodically update buffer status display."""
+        import time as _time
+        while self.buffering_active:
+            self.update_buffer_status()
+            _time.sleep(0.2)  # Update 5 times per second
+    
+    def update_buffer_status(self):
+        """Update buffer status label in GUI."""
+        if self.buffer_status_label:
+            try:
+                status = self.frame_buffer.get_stats()
+                if status['is_buffering']:
+                    fill_pct = (status['buffer_size'] / self.frame_buffer.pre_buffer_threshold * 100) if self.frame_buffer.pre_buffer_threshold > 0 else 0
+                    text = f"🔄 Buffering: {status['buffer_size']}/{self.frame_buffer.pre_buffer_threshold} frames ({fill_pct:.0f}%)"
+                    bg_color = '#FF8C00'  # Orange for buffering
+                else:
+                    text = f"✓ Buffer: {status['buffer_size']}/{status['buffer_max']} frames | Total: {status['total_frames_buffered']} | Incomplete: {status['incomplete_frames']}"
+                    bg_color = '#2E8B57'  # Green for ready
+                
+                self.buffer_status_label.config(text=text, bg=bg_color)
+            except Exception as e:
+                pass
+    
     def handler(self):
         """Handler on explicitly closing the GUI window."""
         self.pauseMovie()

@@ -9,9 +9,14 @@ cd python_rtp
 
 **Run Server:**
 
+python Server.py <server_port>
+
 python Server.py 2026
 
 **Run Client:**
+
+python ClientLauncher.py <server_host> <server_port> <RTP_port
+video_file>
 
 python ClientLauncher.py 10.111.209.190 2026 5000 movie.Mjpeg 
 
@@ -23,10 +28,14 @@ python ClientLauncher.py 10.111.209.190 2026 5000 movie.Mjpeg
 python convert_to_prefixed_mjpeg.py 720p.mjpeg temp.Mjpeg
 
 **Run Server:**
+python Server.py <server_port>
 
 python Server.py 2026
 
 **Run Client:**
+
+python ClientLauncher.py <server_host> <server_port> <RTP_port
+video_file>
 
 python ClientLauncher.py 10.111.209.190 2026 5000 temp.Mjpeg 
 
